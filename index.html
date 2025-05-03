@@ -1,1 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Fullscreen Viewer</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #121212;
+            color: white;
+        }
+        input {
+            padding: 10px;
+            width: 60%;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        iframe {
+            width: 100vw;
+            height: 100vh;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Enter a YouTube Link:</h1>
+    <input type="text" id="youtubeLink" placeholder="Paste YouTube URL here">
+    <button onclick="loadVideo()">Play Video</button>
+    
+    <div id="videoContainer"></div>
+
+    <script>
+        function loadVideo() {
+            let link = document.getElementById("youtubeLink").value;
+            let videoId = extractVideoID(link);
+            if (videoId) {
+                document.getElementById("videoContainer").innerHTML = 
+                    `<iframe src="https://www.youtube.com/embed/${videoId}?autoplay=1&fs=1" allowfullscreen></iframe>`;
+            } else {
+                alert("Please enter a valid YouTube link!");
+            }
+        }
+
+        function extractVideoID(url) {
+            let regex = /(?:youtube\.com\/(?:.*v=|.*\/)|youtu\.be\/)([^"&?/ ]{11})/;
+            let match = url.match(regex);
+            return match ? match[1] : null;
+        }
+    </script>
+
+</body>
+</html>
 

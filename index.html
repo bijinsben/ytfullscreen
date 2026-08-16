@@ -1,709 +1,806 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
+<title>Asianet News Live</title>
 
-  <title>Asianet News Live</title>
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+}
 
-  <style>
-    html,
-    body,
-    #app,
-    #player-container,
-    #player {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      padding: 0;
-    }
+#player-container {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    background: #000;
+}
 
-    html,
-    body {
-      background: #000;
-      overflow: hidden;
-    }
+#player {
+    width: 100%;
+    height: 100%;
+}
 
-    #app {
-      position: fixed;
-      inset: 0;
-      background: #000;
-    }
+#status {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
 
-    #player-container {
-      position: absolute;
-      inset: 0;
-      background: #000;
-    }
+    display: flex;
+    align-items: center;
+    justify-content: center;
 
-    #player iframe {
-      width: 100%;
-      height: 100%;
-      border: 0;
-    }
+    background: #000;
+    color: white;
 
-    #status {
-      position: fixed;
-      inset: 0;
-      z-index: 100;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+    font-family: Arial, sans-serif;
+    font-size: 20px;
+    text-align: center;
+}
 
-      background: #000;
-      color: #fff;
-
-      font-family: Arial, sans-serif;
-      font-size: 20px;
-      text-align: center;
-
-      padding: 30px;
-    }
-
-    #status.hidden {
-      display: none;
-    }
-
-    #error {
-      color: #ff5555;
-    }
-  </style>
+.hidden {
+    display: none !important;
+}
+</style>
 </head>
 
 <body>
 
-<div id="app">
-
-  <div id="player-container">
+<div id="player-container">
     <div id="player"></div>
-  </div>
+</div>
 
-  <div id="status">
-    Finding Asianet News live stream...
-  </div>
-
+<div id="status">
+    Checking Asianet News live stream...
 </div>
 
 
 <script>
 
-  /*
-   * IMPORTANT:
-   *
-   * DO NOT put the API key you posted into GitHub.
-   *
-   * Revoke/rotate that key in Google Cloud and put the
-   * replacement key here.
-   */
-  const API_KEY = "YOUR_NEW_YOUTUBE_API_KEY";
+/*
+===========================================================
+CONFIGURATION
+===========================================================
+*/
 
-  const CHANNEL_HANDLE = "@asianetnews";
-
-  /*
-   * Check every 30 seconds.
-   */
-  const CHECK_INTERVAL = 30 * 1000;
-
-  let player = null;
-  let currentVideoId = null;
-  let channelId = null;
+/*
+ * IMPORTANT:
+ * You exposed your previous API key publicly.
+ * REVOKE THAT KEY and create a new restricted key.
+ */
+const API_KEY = "AIzaSyAanMTtHl2o_pnMBB3i81pDsXV8TBsEdr0";
 
 
-  const statusElement =
-    document.getElementById("status");
+/*
+ * Verified Asianet News channel ID.
+ */
+const CHANNEL_ID =
+    "UCf8w5m0YsRa8MHQ5bwSGmbw";
 
 
-  function setStatus(message, error = false) {
-
-    statusElement.textContent = message;
-
-    statusElement.classList.remove("hidden");
-
-    if (error) {
-      statusElement.id = "status";
-      statusElement.innerHTML =
-        `<span id="error">${message}</span>`;
-    }
-  }
+/*
+ * Check every 20 seconds.
+ */
+const CHECK_INTERVAL = 20000;
 
 
-  function hideStatus() {
-    statusElement.classList.add("hidden");
-  }
+let player = null;
+let currentVideoId = null;
+let youtubeReady = false;
 
 
-  /*
-   * ---------------------------------------------------------
-   * 1. Resolve @asianetnews to its channel ID
-   * ---------------------------------------------------------
-   */
+/*
+===========================================================
+STATUS
+===========================================================
+*/
 
-  async function getChannelId() {
+function showStatus(text) {
+    const status = document.getElementById("status");
 
-    const url =
-      "https://www.googleapis.com/youtube/v3/channels" +
-      "?part=id" +
-      "&forHandle=" +
-      encodeURIComponent(CHANNEL_HANDLE) +
-      "&key=" +
-      encodeURIComponent(API_KEY);
-
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      throw new Error(
-        "Could not resolve Asianet News channel."
-      );
-    }
-
-    const data = await response.json();
-
-    if (!data.items || data.items.length === 0) {
-      throw new Error(
-        "Asianet News channel was not found."
-      );
-    }
-
-    return data.items[0].id;
-  }
+    status.textContent = text;
+    status.classList.remove("hidden");
+}
 
 
-  /*
-   * ---------------------------------------------------------
-   * 2. Find ACTIVE live broadcasts only
-   * ---------------------------------------------------------
-   *
-   * eventType=live is important.
-   *
-   * We do NOT use:
-   *
-   *   order=date
-   *   uploads playlist
-   *   latest video
-   *
-   * because those can return an old recorded livestream.
-   */
+function hideStatus() {
+    document
+        .getElementById("status")
+        .classList.add("hidden");
+}
 
-  async function findActiveLiveVideo(channelId) {
 
-    const url =
-      "https://www.googleapis.com/youtube/v3/search" +
-      "?part=snippet" +
-      "&channelId=" +
-      encodeURIComponent(channelId) +
-      "&eventType=live" +
-      "&type=video" +
-      "&order=date" +
-      "&maxResults=10" +
-      "&key=" +
-      encodeURIComponent(API_KEY);
+/*
+===========================================================
+GET CURRENT LIVE VIDEO
+===========================================================
+*/
 
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-
-      throw new Error(
-        "Live search failed: " + errorText
-      );
-    }
-
-    const data = await response.json();
-
-    if (!data.items || data.items.length === 0) {
-      return null;
-    }
-
+async function getCurrentLiveVideo() {
 
     /*
-     * -------------------------------------------------------
-     * 3. Extra verification using videos.list
-     * -------------------------------------------------------
+     * IMPORTANT:
      *
-     * This protects against accidentally playing an old
-     * archived livestream.
+     * eventType=live means ONLY ACTIVE LIVE BROADCASTS.
+     *
+     * We are NOT asking for latest uploaded videos.
      */
-
-    const ids = data.items
-      .map(item => item.id.videoId)
-      .filter(Boolean);
-
-    if (ids.length === 0) {
-      return null;
-    }
-
-
-    const verifyUrl =
-      "https://www.googleapis.com/youtube/v3/videos" +
-      "?part=snippet,liveStreamingDetails,status" +
-      "&id=" +
-      encodeURIComponent(ids.join(",")) +
-      "&key=" +
-      encodeURIComponent(API_KEY);
+    const searchURL =
+        "https://www.googleapis.com/youtube/v3/search" +
+        "?part=snippet" +
+        "&channelId=" + encodeURIComponent(CHANNEL_ID) +
+        "&eventType=live" +
+        "&type=video" +
+        "&maxResults=10" +
+        "&key=" + encodeURIComponent(API_KEY);
 
 
-    const verifyResponse =
-      await fetch(verifyUrl);
+    const response =
+        await fetch(searchURL);
 
 
-    if (!verifyResponse.ok) {
-      throw new Error(
-        "Live verification failed."
-      );
-    }
+    if (!response.ok) {
 
+        const error =
+            await response.text();
 
-    const verified =
-      await verifyResponse.json();
-
-
-    /*
-     * A broadcast is accepted only when:
-     *
-     * actualStartTime exists
-     *
-     * AND
-     *
-     * actualEndTime does NOT exist.
-     */
-
-    const activeStreams =
-      (verified.items || []).filter(video => {
-
-        const live =
-          video.liveStreamingDetails;
-
-        if (!live) {
-          return false;
-        }
-
-        const started =
-          Boolean(live.actualStartTime);
-
-        const notEnded =
-          !live.actualEndTime;
-
-        const embeddable =
-          video.status?.embeddable !== false;
-
-        return (
-          started &&
-          notEnded &&
-          embeddable
+        console.error(
+            "YouTube search API error:",
+            error
         );
-      });
 
-
-    if (activeStreams.length === 0) {
-      return null;
+        throw new Error(
+            "YouTube API error"
+        );
     }
 
 
-    /*
-     * Pick the newest active broadcast.
-     */
-
-    activeStreams.sort((a, b) => {
-
-      const aTime =
-        new Date(
-          a.liveStreamingDetails.actualStartTime
-        ).getTime();
-
-      const bTime =
-        new Date(
-          b.liveStreamingDetails.actualStartTime
-        ).getTime();
-
-      return bTime - aTime;
-    });
+    const data =
+        await response.json();
 
 
-    return activeStreams[0];
-  }
-
-
-  /*
-   * ---------------------------------------------------------
-   * 4. Load YouTube IFrame API
-   * ---------------------------------------------------------
-   */
-
-  function loadYouTubeAPI() {
-
-    return new Promise(resolve => {
-
-      if (
-        window.YT &&
-        window.YT.Player
-      ) {
-        resolve();
-        return;
-      }
-
-
-      window.onYouTubeIframeAPIReady =
-        resolve;
-
-
-      const script =
-        document.createElement("script");
-
-      script.src =
-        "https://www.youtube.com/iframe_api";
-
-      document.head.appendChild(script);
-    });
-  }
-
-
-  /*
-   * ---------------------------------------------------------
-   * 5. Start the live video
-   * ---------------------------------------------------------
-   */
-
-  async function startVideo(video) {
-
-    const videoId =
-      video.id;
+    console.log(
+        "Live search result:",
+        data
+    );
 
 
     if (
-      currentVideoId === videoId &&
-      player
+        !data.items ||
+        data.items.length === 0
     ) {
-      return;
+
+        return null;
+    }
+
+
+    /*
+     * Get all candidate live video IDs.
+     */
+    const videoIds =
+        data.items
+            .map(item => item.id.videoId)
+            .filter(Boolean);
+
+
+    if (videoIds.length === 0) {
+        return null;
+    }
+
+
+    /*
+     * SECOND CHECK:
+     *
+     * Ask YouTube for liveStreamingDetails.
+     *
+     * This prevents an old/ended broadcast from being
+     * accidentally selected.
+     */
+
+    const verifyURL =
+        "https://www.googleapis.com/youtube/v3/videos" +
+        "?part=snippet,liveStreamingDetails,status" +
+        "&id=" +
+        encodeURIComponent(videoIds.join(",")) +
+        "&key=" +
+        encodeURIComponent(API_KEY);
+
+
+    const verifyResponse =
+        await fetch(verifyURL);
+
+
+    if (!verifyResponse.ok) {
+
+        const error =
+            await verifyResponse.text();
+
+        console.error(
+            "YouTube verification error:",
+            error
+        );
+
+        throw new Error(
+            "Unable to verify live stream"
+        );
+    }
+
+
+    const verifyData =
+        await verifyResponse.json();
+
+
+    console.log(
+        "Verified videos:",
+        verifyData
+    );
+
+
+    /*
+     * ONLY accept a video if:
+     *
+     * 1. actualStartTime exists
+     * 2. actualEndTime does NOT exist
+     *
+     * This is the important protection against
+     * playing an old recorded livestream.
+     */
+
+    const active =
+        (verifyData.items || [])
+        .filter(video => {
+
+            const live =
+                video.liveStreamingDetails;
+
+            if (!live) {
+                return false;
+            }
+
+
+            const hasStarted =
+                Boolean(
+                    live.actualStartTime
+                );
+
+
+            const hasNotEnded =
+                !live.actualEndTime;
+
+
+            const embeddable =
+                video.status?.embeddable !== false;
+
+
+            return (
+                hasStarted &&
+                hasNotEnded &&
+                embeddable
+            );
+        });
+
+
+    if (active.length === 0) {
+
+        return null;
+    }
+
+
+    /*
+     * If multiple live broadcasts exist,
+     * choose the newest one.
+     */
+
+    active.sort((a, b) => {
+
+        const aTime =
+            new Date(
+                a.liveStreamingDetails.actualStartTime
+            ).getTime();
+
+
+        const bTime =
+            new Date(
+                b.liveStreamingDetails.actualStartTime
+            ).getTime();
+
+
+        return bTime - aTime;
+    });
+
+
+    return active[0];
+}
+
+
+/*
+===========================================================
+LOAD YOUTUBE IFRAME API
+===========================================================
+*/
+
+function loadYouTubeAPI() {
+
+    return new Promise(resolve => {
+
+        if (
+            window.YT &&
+            window.YT.Player
+        ) {
+
+            youtubeReady = true;
+
+            resolve();
+
+            return;
+        }
+
+
+        window.onYouTubeIframeAPIReady =
+            function() {
+
+                youtubeReady = true;
+
+                resolve();
+            };
+
+
+        const script =
+            document.createElement("script");
+
+
+        script.src =
+            "https://www.youtube.com/iframe_api";
+
+
+        document.head.appendChild(script);
+    });
+}
+
+
+/*
+===========================================================
+START VIDEO
+===========================================================
+*/
+
+async function playLiveVideo(video) {
+
+    const videoId =
+        video.id;
+
+
+    /*
+     * Don't reload the same stream every 20 seconds.
+     */
+
+    if (
+        currentVideoId === videoId &&
+        player
+    ) {
+
+        return;
     }
 
 
     currentVideoId =
-      videoId;
+        videoId;
 
 
     console.log(
-      "Starting live video:",
-      videoId
+        "CURRENT LIVE VIDEO:",
+        videoId
     );
 
 
     console.log(
-      "Title:",
-      video.snippet.title
+        "TITLE:",
+        video.snippet.title
     );
 
 
     console.log(
-      "Actual start:",
-      video.liveStreamingDetails.actualStartTime
+        "START:",
+        video.liveStreamingDetails.actualStartTime
     );
 
 
     /*
-     * Destroy old player.
+     * Destroy previous player.
      */
 
     if (player) {
 
-      try {
-        player.destroy();
-      } catch (e) {
-        console.warn(e);
-      }
+        try {
+            player.destroy();
+        } catch (e) {
+            console.warn(e);
+        }
 
-      player = null;
+        player = null;
     }
 
 
     await loadYouTubeAPI();
 
 
+    /*
+     * Create embedded YouTube player.
+     */
+
     player =
-      new YT.Player("player", {
+        new YT.Player(
+            "player",
+            {
 
-        videoId: videoId,
+                videoId: videoId,
 
-        width: "100%",
-        height: "100%",
-
-
-        playerVars: {
-
-          /*
-           * Try autoplay.
-           */
-          autoplay: 1,
-
-          /*
-           * Start from the live edge.
-           */
-          start: 0,
-
-          /*
-           * Allow fullscreen button.
-           */
-          fs: 1,
-
-          /*
-           * Inline playback.
-           */
-          playsinline: 1,
-
-          /*
-           * Don't show unrelated recommendations.
-           */
-          rel: 0
-        },
+                width: "100%",
+                height: "100%",
 
 
-        events: {
+                playerVars: {
 
-          onReady: function(event) {
+                    /*
+                     * Automatically start.
+                     */
+                    autoplay: 1,
 
-            /*
-             * Muted autoplay has much better browser
-             * compatibility than autoplay with sound.
-             */
+                    /*
+                     * Live player.
+                     */
+                    playsinline: 1,
 
-            event.target.mute();
+                    /*
+                     * Fullscreen capability.
+                     */
+                    fs: 1,
 
-            event.target.playVideo();
+                    /*
+                     * No related videos.
+                     */
+                    rel: 0,
 
-
-            /*
-             * Try to enter fullscreen.
-             *
-             * This may be rejected by the browser because
-             * fullscreen normally requires user activation.
-             */
-
-            requestFullscreen();
-
-
-            hideStatus();
-          },
-
-
-          onStateChange:
-            function(event) {
-
-              console.log(
-                "YouTube state:",
-                event.data
-              );
+                    /*
+                     * Start at live edge.
+                     */
+                    start: 0
+                },
 
 
-              /*
-               * PLAYING = 1
-               */
-              if (
-                event.data ===
-                YT.PlayerState.PLAYING
-              ) {
-                hideStatus();
-              }
+                events: {
+
+                    onReady:
+                    function(event) {
+
+                        console.log(
+                            "YouTube player ready"
+                        );
 
 
-              /*
-               * If playback unexpectedly ends,
-               * immediately check whether a new live
-               * broadcast exists.
-               */
+                        /*
+                         * Mute first so browsers are
+                         * more likely to allow autoplay.
+                         */
 
-              if (
-                event.data ===
-                YT.PlayerState.ENDED
-              ) {
-
-                currentVideoId = null;
-
-                checkLive();
-              }
-            },
+                        event.target.mute();
 
 
-          onError:
-            function(event) {
+                        /*
+                         * Start playback.
+                         */
 
-              console.error(
-                "YouTube player error:",
-                event.data
-              );
+                        event.target.playVideo();
 
-              currentVideoId = null;
 
-              setStatus(
-                "YouTube could not play this live stream."
-              );
+                        /*
+                         * Try browser fullscreen.
+                         */
 
-              setTimeout(
-                checkLive,
-                5000
-              );
+                        requestFullscreen();
+
+
+                        hideStatus();
+                    },
+
+
+                    onStateChange:
+                    function(event) {
+
+                        console.log(
+                            "Player state:",
+                            event.data
+                        );
+
+
+                        /*
+                         * PLAYING = 1
+                         */
+
+                        if (
+                            event.data ===
+                            YT.PlayerState.PLAYING
+                        ) {
+
+                            hideStatus();
+
+
+                            /*
+                             * Make sure it is playing
+                             * close to the live edge.
+                             */
+
+                            try {
+
+                                const duration =
+                                    player.getDuration();
+
+                                const current =
+                                    player.getCurrentTime();
+
+
+                                /*
+                                 * If more than 30 seconds
+                                 * behind the live edge,
+                                 * jump forward.
+                                 */
+
+                                if (
+                                    duration > 0 &&
+                                    duration - current > 30
+                                ) {
+
+                                    player.seekTo(
+                                        duration,
+                                        true
+                                    );
+                                }
+
+                            } catch (e) {
+                                console.warn(e);
+                            }
+                        }
+
+
+                        /*
+                         * If YouTube says ENDED,
+                         * look for the next live stream.
+                         */
+
+                        if (
+                            event.data ===
+                            YT.PlayerState.ENDED
+                        ) {
+
+                            console.log(
+                                "Stream ended. Searching for new live stream..."
+                            );
+
+
+                            currentVideoId =
+                                null;
+
+
+                            checkLive();
+                        }
+                    },
+
+
+                    onError:
+                    function(event) {
+
+                        console.error(
+                            "YouTube player error:",
+                            event.data
+                        );
+
+
+                        currentVideoId =
+                            null;
+
+
+                        showStatus(
+                            "YouTube player error. Retrying..."
+                        );
+
+
+                        setTimeout(
+                            checkLive,
+                            5000
+                        );
+                    }
+                }
             }
-        }
-      });
-  }
+        );
+}
 
 
-  /*
-   * ---------------------------------------------------------
-   * Fullscreen
-   * ---------------------------------------------------------
-   */
+/*
+===========================================================
+FULLSCREEN
+===========================================================
+*/
 
-  async function requestFullscreen() {
+async function requestFullscreen() {
 
-    const element =
-      document.getElementById(
-        "player-container"
-      );
+    const container =
+        document.getElementById(
+            "player-container"
+        );
 
 
     try {
 
-      if (
-        document.fullscreenElement
-      ) {
-        return;
-      }
+        /*
+         * Standard browser fullscreen.
+         */
+
+        if (
+            document.fullscreenElement
+        ) {
+
+            return;
+        }
 
 
-      if (
-        element.requestFullscreen
-      ) {
+        if (
+            container.requestFullscreen
+        ) {
 
-        await element.requestFullscreen();
+            await container.requestFullscreen();
 
-        return;
-      }
+            console.log(
+                "Fullscreen requested"
+            );
+
+            return;
+        }
 
 
-      /*
-       * Safari
-       */
+        /*
+         * Safari.
+         */
 
-      if (
-        element.webkitRequestFullscreen
-      ) {
+        if (
+            container.webkitRequestFullscreen
+        ) {
 
-        element.webkitRequestFullscreen();
+            container.webkitRequestFullscreen();
 
-        return;
-      }
+            return;
+        }
 
     } catch (error) {
 
-      console.warn(
-        "Fullscreen was blocked by browser:",
-        error
-      );
+        /*
+         * Browser may reject fullscreen because
+         * there was no user gesture.
+         */
+
+        console.warn(
+            "Fullscreen blocked by browser:",
+            error
+        );
     }
-  }
+}
 
 
-  /*
-   * ---------------------------------------------------------
-   * Check live stream
-   * ---------------------------------------------------------
-   */
+/*
+===========================================================
+CHECK CURRENT LIVE STREAM
+===========================================================
+*/
 
-  async function checkLive() {
+async function checkLive() {
 
     try {
-
-      if (!channelId) {
-
-        setStatus(
-          "Finding Asianet News channel..."
-        );
-
-        channelId =
-          await getChannelId();
 
         console.log(
-          "Channel ID:",
-          channelId
-        );
-      }
-
-
-      const video =
-        await findActiveLiveVideo(
-          channelId
+            "Checking for active Asianet News stream..."
         );
 
 
-      /*
-       * No active broadcast.
-       */
+        const video =
+            await getCurrentLiveVideo();
 
-      if (!video) {
 
-        currentVideoId = null;
+        if (!video) {
 
-        setStatus(
-          "Asianet News is not live right now."
+            console.log(
+                "No active broadcast found."
+            );
+
+
+            /*
+             * If a previous player exists, don't
+             * immediately destroy it.
+             *
+             * The API can temporarily return no result.
+             */
+
+            if (!player) {
+
+                showStatus(
+                    "Asianet News is not currently live."
+                );
+            }
+
+
+            return;
+        }
+
+
+        console.log(
+            "ACTIVE STREAM FOUND:",
+            video.id
         );
 
-        return;
-      }
 
+        /*
+         * Play only if this is a different broadcast.
+         */
 
-      /*
-       * Make sure we haven't accidentally selected
-       * an already playing old video.
-       */
+        if (
+            video.id !== currentVideoId
+        ) {
 
-      if (
-        video.id !== currentVideoId
-      ) {
-
-        await startVideo(video);
-      }
-
+            await playLiveVideo(video);
+        }
 
     } catch (error) {
 
-      console.error(error);
+        console.error(
+            "checkLive():",
+            error
+        );
 
-      setStatus(
-        "Unable to check Asianet News live stream."
-      );
+
+        if (!player) {
+
+            showStatus(
+                "Unable to connect to YouTube. Retrying..."
+            );
+        }
     }
-  }
+}
 
 
-  /*
-   * ---------------------------------------------------------
-   * Start
-   * ---------------------------------------------------------
-   */
+/*
+===========================================================
+START
+===========================================================
+*/
 
-  async function init() {
+async function init() {
+
+    showStatus(
+        "Finding current Asianet News live stream..."
+    );
+
 
     await checkLive();
 
 
     /*
      * Keep checking.
-     *
-     * This means if Asianet News switches to a new
-     * broadcast, the page can automatically switch to it.
      */
 
     setInterval(
-      checkLive,
-      CHECK_INTERVAL
+        checkLive,
+        CHECK_INTERVAL
     );
-  }
+}
 
 
-  init();
+init();
 
 </script>
 

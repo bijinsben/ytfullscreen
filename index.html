@@ -1,60 +1,711 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Fullscreen Viewer</title>
-    <style>
-        body {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #121212;
-            color: white;
-        }
-        input {
-            padding: 10px;
-            width: 60%;
-            margin-bottom: 10px;
-            font-size: 16px;
-        }
-        iframe {
-            width: 100vw;
-            height: 100vh;
-            border: none;
-        }
-    </style>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>Asianet News Live</title>
+
+  <style>
+    html,
+    body,
+    #app,
+    #player-container,
+    #player {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      background: #000;
+      overflow: hidden;
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+      background: #000;
+    }
+
+    #player-container {
+      position: absolute;
+      inset: 0;
+      background: #000;
+    }
+
+    #player iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+    }
+
+    #status {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      background: #000;
+      color: #fff;
+
+      font-family: Arial, sans-serif;
+      font-size: 20px;
+      text-align: center;
+
+      padding: 30px;
+    }
+
+    #status.hidden {
+      display: none;
+    }
+
+    #error {
+      color: #ff5555;
+    }
+  </style>
 </head>
+
 <body>
 
-    <h1>Enter a YouTube Link:</h1>
-    <input type="text" id="youtubeLink" placeholder="Paste YouTube URL here">
-    <button onclick="loadVideo()">Play Video</button>
-    
-    <div id="videoContainer"></div>
+<div id="app">
 
-    <script>
-        function loadVideo() {
-            let link = document.getElementById("youtubeLink").value;
-            let videoId = extractVideoID(link);
-            if (videoId) {
-                document.getElementById("videoContainer").innerHTML = 
-                    `<iframe src="https://www.youtube.com/embed/${videoId}?autoplay=1&fs=1" allowfullscreen></iframe>`;
-            } else {
-                alert("Please enter a valid YouTube link!");
+  <div id="player-container">
+    <div id="player"></div>
+  </div>
+
+  <div id="status">
+    Finding Asianet News live stream...
+  </div>
+
+</div>
+
+
+<script>
+
+  /*
+   * IMPORTANT:
+   *
+   * DO NOT put the API key you posted into GitHub.
+   *
+   * Revoke/rotate that key in Google Cloud and put the
+   * replacement key here.
+   */
+  const API_KEY = "YOUR_NEW_YOUTUBE_API_KEY";
+
+  const CHANNEL_HANDLE = "@asianetnews";
+
+  /*
+   * Check every 30 seconds.
+   */
+  const CHECK_INTERVAL = 30 * 1000;
+
+  let player = null;
+  let currentVideoId = null;
+  let channelId = null;
+
+
+  const statusElement =
+    document.getElementById("status");
+
+
+  function setStatus(message, error = false) {
+
+    statusElement.textContent = message;
+
+    statusElement.classList.remove("hidden");
+
+    if (error) {
+      statusElement.id = "status";
+      statusElement.innerHTML =
+        `<span id="error">${message}</span>`;
+    }
+  }
+
+
+  function hideStatus() {
+    statusElement.classList.add("hidden");
+  }
+
+
+  /*
+   * ---------------------------------------------------------
+   * 1. Resolve @asianetnews to its channel ID
+   * ---------------------------------------------------------
+   */
+
+  async function getChannelId() {
+
+    const url =
+      "https://www.googleapis.com/youtube/v3/channels" +
+      "?part=id" +
+      "&forHandle=" +
+      encodeURIComponent(CHANNEL_HANDLE) +
+      "&key=" +
+      encodeURIComponent(API_KEY);
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(
+        "Could not resolve Asianet News channel."
+      );
+    }
+
+    const data = await response.json();
+
+    if (!data.items || data.items.length === 0) {
+      throw new Error(
+        "Asianet News channel was not found."
+      );
+    }
+
+    return data.items[0].id;
+  }
+
+
+  /*
+   * ---------------------------------------------------------
+   * 2. Find ACTIVE live broadcasts only
+   * ---------------------------------------------------------
+   *
+   * eventType=live is important.
+   *
+   * We do NOT use:
+   *
+   *   order=date
+   *   uploads playlist
+   *   latest video
+   *
+   * because those can return an old recorded livestream.
+   */
+
+  async function findActiveLiveVideo(channelId) {
+
+    const url =
+      "https://www.googleapis.com/youtube/v3/search" +
+      "?part=snippet" +
+      "&channelId=" +
+      encodeURIComponent(channelId) +
+      "&eventType=live" +
+      "&type=video" +
+      "&order=date" +
+      "&maxResults=10" +
+      "&key=" +
+      encodeURIComponent(API_KEY);
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      throw new Error(
+        "Live search failed: " + errorText
+      );
+    }
+
+    const data = await response.json();
+
+    if (!data.items || data.items.length === 0) {
+      return null;
+    }
+
+
+    /*
+     * -------------------------------------------------------
+     * 3. Extra verification using videos.list
+     * -------------------------------------------------------
+     *
+     * This protects against accidentally playing an old
+     * archived livestream.
+     */
+
+    const ids = data.items
+      .map(item => item.id.videoId)
+      .filter(Boolean);
+
+    if (ids.length === 0) {
+      return null;
+    }
+
+
+    const verifyUrl =
+      "https://www.googleapis.com/youtube/v3/videos" +
+      "?part=snippet,liveStreamingDetails,status" +
+      "&id=" +
+      encodeURIComponent(ids.join(",")) +
+      "&key=" +
+      encodeURIComponent(API_KEY);
+
+
+    const verifyResponse =
+      await fetch(verifyUrl);
+
+
+    if (!verifyResponse.ok) {
+      throw new Error(
+        "Live verification failed."
+      );
+    }
+
+
+    const verified =
+      await verifyResponse.json();
+
+
+    /*
+     * A broadcast is accepted only when:
+     *
+     * actualStartTime exists
+     *
+     * AND
+     *
+     * actualEndTime does NOT exist.
+     */
+
+    const activeStreams =
+      (verified.items || []).filter(video => {
+
+        const live =
+          video.liveStreamingDetails;
+
+        if (!live) {
+          return false;
+        }
+
+        const started =
+          Boolean(live.actualStartTime);
+
+        const notEnded =
+          !live.actualEndTime;
+
+        const embeddable =
+          video.status?.embeddable !== false;
+
+        return (
+          started &&
+          notEnded &&
+          embeddable
+        );
+      });
+
+
+    if (activeStreams.length === 0) {
+      return null;
+    }
+
+
+    /*
+     * Pick the newest active broadcast.
+     */
+
+    activeStreams.sort((a, b) => {
+
+      const aTime =
+        new Date(
+          a.liveStreamingDetails.actualStartTime
+        ).getTime();
+
+      const bTime =
+        new Date(
+          b.liveStreamingDetails.actualStartTime
+        ).getTime();
+
+      return bTime - aTime;
+    });
+
+
+    return activeStreams[0];
+  }
+
+
+  /*
+   * ---------------------------------------------------------
+   * 4. Load YouTube IFrame API
+   * ---------------------------------------------------------
+   */
+
+  function loadYouTubeAPI() {
+
+    return new Promise(resolve => {
+
+      if (
+        window.YT &&
+        window.YT.Player
+      ) {
+        resolve();
+        return;
+      }
+
+
+      window.onYouTubeIframeAPIReady =
+        resolve;
+
+
+      const script =
+        document.createElement("script");
+
+      script.src =
+        "https://www.youtube.com/iframe_api";
+
+      document.head.appendChild(script);
+    });
+  }
+
+
+  /*
+   * ---------------------------------------------------------
+   * 5. Start the live video
+   * ---------------------------------------------------------
+   */
+
+  async function startVideo(video) {
+
+    const videoId =
+      video.id;
+
+
+    if (
+      currentVideoId === videoId &&
+      player
+    ) {
+      return;
+    }
+
+
+    currentVideoId =
+      videoId;
+
+
+    console.log(
+      "Starting live video:",
+      videoId
+    );
+
+
+    console.log(
+      "Title:",
+      video.snippet.title
+    );
+
+
+    console.log(
+      "Actual start:",
+      video.liveStreamingDetails.actualStartTime
+    );
+
+
+    /*
+     * Destroy old player.
+     */
+
+    if (player) {
+
+      try {
+        player.destroy();
+      } catch (e) {
+        console.warn(e);
+      }
+
+      player = null;
+    }
+
+
+    await loadYouTubeAPI();
+
+
+    player =
+      new YT.Player("player", {
+
+        videoId: videoId,
+
+        width: "100%",
+        height: "100%",
+
+
+        playerVars: {
+
+          /*
+           * Try autoplay.
+           */
+          autoplay: 1,
+
+          /*
+           * Start from the live edge.
+           */
+          start: 0,
+
+          /*
+           * Allow fullscreen button.
+           */
+          fs: 1,
+
+          /*
+           * Inline playback.
+           */
+          playsinline: 1,
+
+          /*
+           * Don't show unrelated recommendations.
+           */
+          rel: 0
+        },
+
+
+        events: {
+
+          onReady: function(event) {
+
+            /*
+             * Muted autoplay has much better browser
+             * compatibility than autoplay with sound.
+             */
+
+            event.target.mute();
+
+            event.target.playVideo();
+
+
+            /*
+             * Try to enter fullscreen.
+             *
+             * This may be rejected by the browser because
+             * fullscreen normally requires user activation.
+             */
+
+            requestFullscreen();
+
+
+            hideStatus();
+          },
+
+
+          onStateChange:
+            function(event) {
+
+              console.log(
+                "YouTube state:",
+                event.data
+              );
+
+
+              /*
+               * PLAYING = 1
+               */
+              if (
+                event.data ===
+                YT.PlayerState.PLAYING
+              ) {
+                hideStatus();
+              }
+
+
+              /*
+               * If playback unexpectedly ends,
+               * immediately check whether a new live
+               * broadcast exists.
+               */
+
+              if (
+                event.data ===
+                YT.PlayerState.ENDED
+              ) {
+
+                currentVideoId = null;
+
+                checkLive();
+              }
+            },
+
+
+          onError:
+            function(event) {
+
+              console.error(
+                "YouTube player error:",
+                event.data
+              );
+
+              currentVideoId = null;
+
+              setStatus(
+                "YouTube could not play this live stream."
+              );
+
+              setTimeout(
+                checkLive,
+                5000
+              );
             }
         }
+      });
+  }
 
-        function extractVideoID(url) {
-            let regex = /(?:youtube\.com\/(?:.*v=|.*\/)|youtu\.be\/)([^"&?/ ]{11})/;
-            let match = url.match(regex);
-            return match ? match[1] : null;
-        }
-    </script>
+
+  /*
+   * ---------------------------------------------------------
+   * Fullscreen
+   * ---------------------------------------------------------
+   */
+
+  async function requestFullscreen() {
+
+    const element =
+      document.getElementById(
+        "player-container"
+      );
+
+
+    try {
+
+      if (
+        document.fullscreenElement
+      ) {
+        return;
+      }
+
+
+      if (
+        element.requestFullscreen
+      ) {
+
+        await element.requestFullscreen();
+
+        return;
+      }
+
+
+      /*
+       * Safari
+       */
+
+      if (
+        element.webkitRequestFullscreen
+      ) {
+
+        element.webkitRequestFullscreen();
+
+        return;
+      }
+
+    } catch (error) {
+
+      console.warn(
+        "Fullscreen was blocked by browser:",
+        error
+      );
+    }
+  }
+
+
+  /*
+   * ---------------------------------------------------------
+   * Check live stream
+   * ---------------------------------------------------------
+   */
+
+  async function checkLive() {
+
+    try {
+
+      if (!channelId) {
+
+        setStatus(
+          "Finding Asianet News channel..."
+        );
+
+        channelId =
+          await getChannelId();
+
+        console.log(
+          "Channel ID:",
+          channelId
+        );
+      }
+
+
+      const video =
+        await findActiveLiveVideo(
+          channelId
+        );
+
+
+      /*
+       * No active broadcast.
+       */
+
+      if (!video) {
+
+        currentVideoId = null;
+
+        setStatus(
+          "Asianet News is not live right now."
+        );
+
+        return;
+      }
+
+
+      /*
+       * Make sure we haven't accidentally selected
+       * an already playing old video.
+       */
+
+      if (
+        video.id !== currentVideoId
+      ) {
+
+        await startVideo(video);
+      }
+
+
+    } catch (error) {
+
+      console.error(error);
+
+      setStatus(
+        "Unable to check Asianet News live stream."
+      );
+    }
+  }
+
+
+  /*
+   * ---------------------------------------------------------
+   * Start
+   * ---------------------------------------------------------
+   */
+
+  async function init() {
+
+    await checkLive();
+
+
+    /*
+     * Keep checking.
+     *
+     * This means if Asianet News switches to a new
+     * broadcast, the page can automatically switch to it.
+     */
+
+    setInterval(
+      checkLive,
+      CHECK_INTERVAL
+    );
+  }
+
+
+  init();
+
+</script>
 
 </body>
 </html>
-
